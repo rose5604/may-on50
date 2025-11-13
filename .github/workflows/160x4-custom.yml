@@ -1,0 +1,688 @@
+name: 🚀 160 x 4 private (5 sore)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '10 10 * * *'
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  runtime:
+    name: 🖥️ Runner-${{ matrix.runner }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    strategy:
+      max-parallel: 5
+      fail-fast: false
+      matrix:
+        runner: [1, 2, 3, 4, 5]
+    
+    env:
+      # ============================================
+      # 🔧 CONFIGURATION (EDIT HERE)
+      # ============================================
+      WALLET_COUNT: '160'
+      CONTAINERS_PER_WALLET: '4'
+      RUNTIME_HOURS: '5.5'
+      REUSE_WALLETS: 'true'
+      
+      BATCH_SIZE: '90'
+      PAUSE_SECONDS: '60'
+      PROXY_PORT: '14441'
+      
+      # Total runners (for display only)
+      TOTAL_RUNNERS: '5'
+      
+    steps:
+      # ============================================
+      # 📦 SETUP
+      # ============================================
+      
+      - name: 📦 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            proxy/package-lock.json
+            scripts/package-lock.json
+      
+      - name: 📊 Display Configuration
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎯 Runner-${{ matrix.runner }} Configuration"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Runner ID: ${{ matrix.runner }} of $TOTAL_RUNNERS"
+          echo "Trigger: ${{ github.event_name }}"
+          echo "Wallet Count: $WALLET_COUNT (shared across all runners)"
+          echo "Wallet File: wallets.json (SHARED)"
+          echo "Containers/Wallet: $CONTAINERS_PER_WALLET"
+          echo "This Runner Total: $(( $WALLET_COUNT * $CONTAINERS_PER_WALLET ))"
+          echo "Runtime: $RUNTIME_HOURS hours"
+          echo "Reuse Wallets: $REUSE_WALLETS"
+          echo ""
+          echo "API Keys: ALL keys shared across all runners (load-balanced)"
+          echo ""
+          echo "System:"
+          echo "OS: $(lsb_release -d | cut -f2)"
+          echo "RAM: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Docker: $(docker --version | cut -d' ' -f3 | cut -d',' -f1)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # ============================================
+      # 💰 WALLET MANAGEMENT (SHARED FILE)
+      # ============================================
+      
+      - name: 💰 Handle Shared Wallets
+        id: wallets
+        run: |
+          WALLET_FILE="wallets.json"
+          
+          if [[ "$REUSE_WALLETS" == "true" && -f "$WALLET_FILE" ]]; then
+            echo "♻️  Runner-${{ matrix.runner }}: Using shared wallets from repository"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            ACTUAL_COUNT=$(jq '. | length' $WALLET_FILE)
+            echo "✅ Loaded $ACTUAL_COUNT wallets from $WALLET_FILE"
+            echo "📅 Wallets are version controlled (git)"
+            echo "🔄 All runners use the SAME wallets"
+            
+          else
+            echo "🆕 Runner-${{ matrix.runner }}: Generating new shared wallets"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            # Only runner 1 generates, others wait
+            if [[ "${{ matrix.runner }}" == "1" ]]; then
+              cd scripts
+              [ ! -d "node_modules" ] && npm install
+              node crypto-generator.js $WALLET_COUNT
+              mv wallets.json ../$WALLET_FILE
+              cd ..
+              
+              ACTUAL_COUNT=$WALLET_COUNT
+              echo "✅ Generated $ACTUAL_COUNT new wallets"
+            else
+              echo "⏳ Waiting for Runner-1 to generate wallets..."
+              # Wait for wallets.json to be committed by runner 1
+              for i in {1..60}; do
+                git pull --rebase origin main || git pull --rebase origin master || true
+                if [ -f "$WALLET_FILE" ]; then
+                  ACTUAL_COUNT=$(jq '. | length' $WALLET_FILE)
+                  echo "✅ Found $ACTUAL_COUNT wallets from Runner-1"
+                  break
+                fi
+                [ $i -eq 60 ] && echo "❌ Timeout waiting for wallets" && exit 1
+                sleep 5
+              done
+            fi
+          fi
+          
+          ACTUAL_COUNT=$(jq '. | length' $WALLET_FILE)
+          echo "wallet_count=$ACTUAL_COUNT" >> $GITHUB_OUTPUT
+          echo "wallet_file=$WALLET_FILE" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "📋 Shared Wallet Preview (used by all runners):"
+          jq '.[0] | {address: .address, private_key: (.private_key[:10] + "..." + .private_key[-6:])}' $WALLET_FILE
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # ============================================
+      # 💾 COMMIT WALLETS TO REPO (ONLY RUNNER 1)
+      # ============================================
+      
+      - name: 💾 Commit Shared Wallets to Repository
+        if: always() && matrix.runner == 1
+        run: |
+          echo "💾 Runner-${{ matrix.runner }}: Saving shared wallets to repository..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          WALLET_FILE="wallets.json"
+          
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          if [ ! -f "$WALLET_FILE" ]; then
+            echo "⚠️  $WALLET_FILE not found, skipping commit"
+            exit 0
+          fi
+          
+          git pull --rebase origin main || git pull --rebase origin master || true
+          git add "$WALLET_FILE"
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️  No changes to $WALLET_FILE"
+          else
+            WALLET_COUNT=$(jq '. | length' "$WALLET_FILE")
+            git commit -m "🔄 Aut0-upd4te Sh4red W4llets ($WALLET_COUNT w4llets) [run #${{ github.run_number }}]"
+            
+            MAX_RETRIES=5
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo "✅ Shared wallets committed to repository"
+                echo "📊 Wallets: $WALLET_COUNT"
+                echo "📁 File: $WALLET_FILE"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️  Push failed, retrying ($i/$MAX_RETRIES)..."
+                  sleep $((i * 2))
+                  git pull --rebase origin main || git pull --rebase origin master || true
+                else
+                  echo "❌ Push failed after $MAX_RETRIES attempts"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # ============================================
+      # 🔑 LOAD API KEYS (SHARED ACROSS ALL RUNNERS)
+      # ============================================
+      
+      - name: 🔑 Load API Keys (All Runners Use ALL Keys)
+        id: load_keys
+        env:
+          ALL_KEYS: ${{ secrets.NOVITA_API_KEYS }}
+        run: |
+          echo "🔑 Loading API keys for Runner-${{ matrix.runner }}..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Count total keys
+          IFS=',' read -ra KEYS_ARRAY <<< "$ALL_KEYS"
+          TOTAL_KEYS=${#KEYS_ARRAY[@]}
+          
+          echo "📊 Total API keys: $TOTAL_KEYS"
+          echo "🔄 All runners use ALL keys (shared)"
+          echo "⚖️  Load balancing: Automatic (proxy-based)"
+          echo "🔁 Failover: Enabled (provider_only mode)"
+          echo ""
+          echo "✅ All $TOTAL_KEYS keys loaded for Runner-${{ matrix.runner }}"
+          echo "🔐 Keys preview: ${ALL_KEYS:0:50}..."
+          echo ""
+          
+          # Save to output
+          echo "all_keys<<EOF" >> $GITHUB_OUTPUT
+          echo "$ALL_KEYS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "total_keys=$TOTAL_KEYS" >> $GITHUB_OUTPUT
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # ============================================
+      # 🌐 PROXY SETUP
+      # ============================================
+      
+      - name: 📦 Install Proxy Dependencies
+        working-directory: ./proxy
+        run: |
+          echo "📦 Runner-${{ matrix.runner }}: Installing proxy dependencies..."
+          npm ci --production
+          echo "✅ Installed"
+      
+      - name: ⚙️ Configure Proxy with All API Keys
+        working-directory: ./proxy
+        run: |
+          echo "⚙️  Runner-${{ matrix.runner }}: Creating .env file with ALL ${{ steps.load_keys.outputs.total_keys }} API keys..."
+          
+          cat > .env << EOF
+          NOVITA_API_KEYS=${{ steps.load_keys.outputs.all_keys }}
+          MODEL_MAP={"llama3.3:70b-instruct-q4_K_M":"meta-llama/llama-3.3-70b-instruct"}
+          PORT=$PROXY_PORT
+          RL_MODE=provider_only
+          NOVITA_RPM_PER_KEY=0
+          NOVITA_RPS_PER_KEY=0
+          PROXY_MIN_TPS=15
+          REQUEST_TIMEOUT_MS=120000
+          MAX_TOKENS_PER_REQUEST=50
+          NODE_ENV=production
+          EOF
+          
+          echo "✅ Configured with ${{ steps.load_keys.outputs.total_keys }} API keys (shared)"
+          echo "💰 Token limit: 50 tokens per request (budget saving mode)"
+      
+      - name: 🚀 Start Proxy
+        working-directory: ./proxy
+        run: |
+          echo "🚀 Runner-${{ matrix.runner }}: Starting proxy server..."
+          
+          nohup node index.js > proxy.log 2>&1 &
+          echo $! > proxy.pid
+          
+          echo "⏳ Waiting for proxy..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:$PROXY_PORT/health > /dev/null 2>&1; then
+              echo "✅ Proxy ready on port $PROXY_PORT"
+              break
+            fi
+            [ $i -eq 30 ] && echo "❌ Failed" && tail -20 proxy.log && exit 1
+            sleep 1
+          done
+      
+      - name: 🧪 Test Proxy (Critical - Will Stop on Failure)
+        working-directory: ./proxy
+        env:
+          PROXY_PORT: ${{ env.PROXY_PORT }}
+        run: |
+          echo "🧪 Runner-${{ matrix.runner }}: Running automated proxy tests..."
+          echo "⚠️  WARNING: Deployment will be blocked if tests fail"
+          echo ""
+          
+          chmod +x test_proxy.sh
+          
+          if ./test_proxy.sh; then
+            echo ""
+            echo "✅ All proxy tests passed - Safe to proceed with deployment"
+            exit 0
+          else
+            echo ""
+            echo "❌ Proxy tests FAILED - Stopping workflow to prevent broken deployment"
+            echo "❌ Please check proxy configuration and API keys"
+            echo "❌ Check logs above for detailed error information"
+            exit 1
+          fi
+      
+      # ============================================
+      # 🐳 DOCKER DEPLOYMENT
+      # ============================================
+      
+      - name: 🐳 Setup Docker
+        run: |
+          echo "🐳 Runner-${{ matrix.runner }}: Setting up Docker..."
+          docker network create dria-nodes 2>/dev/null || true
+          docker pull firstbatch/dkn-compute-node:latest
+          echo "✅ Ready"
+      
+      - name: 🚀 Deploy Containers (Using Shared Wallets)
+        id: deploy
+        run: |
+          echo "🚀 Runner-${{ matrix.runner }}: Deploying containers..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          WALLET_FILE="wallets.json"
+          ACTUAL_COUNT=$(jq '. | length' "$WALLET_FILE")
+          TOTAL=$(( $ACTUAL_COUNT * $CONTAINERS_PER_WALLET ))
+          
+          echo "Runner-${{ matrix.runner }}: Deploying $TOTAL containers..."
+          echo "Using $ACTUAL_COUNT wallets from SHARED $WALLET_FILE"
+          echo "Using ${{ steps.load_keys.outputs.total_keys }} API keys (ALL keys, load-balanced)"
+          
+          DKN_MODELS="${{ secrets.DKN_MODELS }}"
+          [ -z "$DKN_MODELS" ] && DKN_MODELS="llama3.3:70b-instruct-q4_K_M"
+          
+          echo "Using model: $DKN_MODELS"
+          
+          STARTED=0
+          
+          for (( w=0; w<$ACTUAL_COUNT; w++ )); do
+            ADDRESS=$(jq -r ".[$w].address" "$WALLET_FILE")
+            PRIVKEY=$(jq -r ".[$w].private_key" "$WALLET_FILE")
+            PRIVKEY="${PRIVKEY#0x}"
+            ADDR_SHORT="${ADDRESS:2:6}"
+            
+            for (( i=1; i<=$CONTAINERS_PER_WALLET; i++ )); do
+              NAME="r${{ matrix.runner }}_w$((w+1))_${ADDR_SHORT}_$(printf '%03d' $i)"
+              
+              docker ps -aq -f name="^${NAME}$" | xargs -r docker rm -f > /dev/null 2>&1
+              
+              if docker run -d \
+                --name "$NAME" \
+                --network dria-nodes \
+                --restart on-failure:3 \
+                -e DKN_WALLET_SECRET_KEY="$PRIVKEY" \
+                -e DKN_MODELS="$DKN_MODELS" \
+                -e OLLAMA_HOST="http://host.docker.internal" \
+                -e OLLAMA_PORT="$PROXY_PORT" \
+                -e OLLAMA_AUTO_PULL="false" \
+                --add-host host.docker.internal:host-gateway \
+                firstbatch/dkn-compute-node:latest > /dev/null 2>&1; then
+                STARTED=$((STARTED + 1))
+              fi
+              
+              if (( STARTED % $BATCH_SIZE == 0 )); then
+                echo "Runner-${{ matrix.runner }} Progress: $STARTED/$TOTAL"
+                sleep $PAUSE_SECONDS
+              fi
+            done
+          done
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Runner-${{ matrix.runner }}: Deployed $STARTED containers"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          echo "started=$STARTED" >> $GITHUB_OUTPUT
+      
+      # ============================================
+      # 📱 SEND DEPLOYMENT TO MONITOR
+      # ============================================
+      
+      - name: 📊 Send Deployment to Monitor
+        if: success()
+        continue-on-error: true
+        env:
+          MONITOR_VPS_URL: 'http://208.76.40.194:1155'
+          MONITOR_API_KEY: 'dkn-monitor-secret-key-12345'
+        run: |
+          echo "📊 Runner-${{ matrix.runner }}: Sending deployment data to monitor..."
+          
+          WALLET_FILE="wallets.json"
+          FIRST_WALLET=$(jq -r '.[0].address' "$WALLET_FILE")
+          GITHUB_USER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          
+          curl -X POST "$MONITOR_VPS_URL/api/deployed" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MONITOR_API_KEY" \
+            -d "{
+              \"github_user\": \"$GITHUB_USER\",
+              \"repository\": \"${{ github.repository }}\",
+              \"run_id\": \"${{ github.run_id }}\",
+              \"runner_id\": ${{ matrix.runner }},
+              \"wallet\": \"$FIRST_WALLET\",
+              \"containers\": ${{ steps.deploy.outputs.started }},
+              \"api_keys\": ${{ steps.load_keys.outputs.total_keys }},
+              \"status\": \"deployed\"
+            }" || echo "⚠️ Monitor notification failed (non-critical)"
+          
+          echo "✅ Deployment data sent"
+
+
+      - name: 📱 Send Deployment Success Notification Telegram
+        if: success()
+        env:
+          BOT_TOKEN: '8378781421:AAEEMC7AIFzpbcK6P_MM5E1d-weQ73J_Wr4'
+          CHAT_ID: '-1001377822481'
+          TOPIC_ID: '15'
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "⚠️  Telegram not configured, skipping"
+            exit 0
+          fi
+          
+          echo "📱 Runner-${{ matrix.runner }}: Sending deployment notification to Topic ID: $TOPIC_ID..."
+          
+          WALLET_FILE="wallets.json"
+          WALLET_COUNT=$(jq '. | length' "$WALLET_FILE")
+          FIRST_WALLET=$(jq -r '.[0].address' "$WALLET_FILE")
+          
+          RUNNING=$(docker ps --filter "name=r${{ matrix.runner }}_" --filter "status=running" | wc -l)
+          RUNNING=$((RUNNING - 1))
+          TOTAL=$(docker ps -a --filter "name=r${{ matrix.runner }}_" | wc -l)
+          TOTAL=$((TOTAL - 1))
+          
+          if [ "$TOTAL" -gt 0 ]; then
+            SUCCESS_RATE=$(( RUNNING * 100 / TOTAL ))
+          else
+            SUCCESS_RATE=0
+          fi
+          
+          TRIGGER="${{ github.event_name }}"
+          if [ "$TRIGGER" = "schedule" ]; then
+            TRIGGER_TEXT="Auto-Schedule"
+          else
+            TRIGGER_TEXT="Manual"
+          fi
+          
+          GITHUB_USER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_URL="https://github.com/${{ github.repository }}"
+          
+          MESSAGE="🚀 *Runner-${{ matrix.runner }} Deployed!*
+
+          🐳 Containers: \`$RUNNING/$TOTAL\` ($SUCCESS_RATE%)
+          💰 Wallets: \`$WALLET_COUNT\` (SHARED across all runners)
+          🔑 API Keys: \`${{ steps.load_keys.outputs.total_keys }}\` (ALL keys, load-balanced)
+          📍 First: \`${FIRST_WALLET:0:10}...${FIRST_WALLET: -8}\`
+          🔄 Trigger: $TRIGGER_TEXT
+          📦 Repo: $REPO_URL
+          #️⃣ Run: \`#${{ github.run_number }}\`
+
+          ⏱️ Runtime: $RUNTIME_HOURS hours
+          🔗 [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          echo "📤 Sending message to Topic $TOPIC_ID..."
+          SEND_MSG=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d message_thread_id="${TOPIC_ID}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true \
+            -d text="$MESSAGE")
+          
+          MSG_OK=$(echo "$SEND_MSG" | jq -r '.ok')
+          if [ "$MSG_OK" = "true" ]; then
+            echo "✅ Message sent to Topic $TOPIC_ID (NO file upload)"
+          else
+            ERROR=$(echo "$SEND_MSG" | jq -r '.description')
+            echo "❌ Failed to send message: $ERROR"
+          fi
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Deployment notification completed"
+
+          
+      # ============================================
+      # ⏰ RUNTIME WITH MONITORING
+      # ============================================
+      
+      - name: ⏰ Runtime Period with Live Monitoring
+        env:
+          MONITOR_VPS_URL: 'http://208.76.40.194:1155'
+          MONITOR_API_KEY: 'dkn-monitor-secret-key-12345'
+        run: |
+          echo "⏰ Runner-${{ matrix.runner }}: Starting runtime with monitoring..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          RUNTIME_SEC=$(echo "$RUNTIME_HOURS * 3600" | bc | cut -d. -f1)
+          START=$(date +%s)
+          END=$((START + RUNTIME_SEC))
+          
+          WALLET_FILE="wallets.json"
+          FIRST_WALLET=$(jq -r '.[0].address' "$WALLET_FILE")
+          GITHUB_USER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          
+          # Monitor VPS endpoint
+          MONITOR_URL="$MONITOR_VPS_URL/api/heartbeat"
+          
+          echo "Runtime: $RUNTIME_HOURS hours"
+          echo "Start: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Monitor: $MONITOR_URL"
+          echo ""
+          
+          HEARTBEAT_COUNT=0
+          NEXT_HEARTBEAT=$START
+          
+          while [ $(date +%s) -lt $END ]; do
+            CURRENT=$(date +%s)
+            ELAPSED=$((CURRENT - START))
+            REMAINING=$((END - CURRENT))
+            
+            # Kirim heartbeat setiap 5 menit (300 detik)
+            if [ $CURRENT -ge $NEXT_HEARTBEAT ]; then
+              HEARTBEAT_COUNT=$((HEARTBEAT_COUNT + 1))
+              
+              # Hitung container status
+              RUNNING=$(docker ps --filter "name=r${{ matrix.runner }}_" --filter "status=running" -q 2>/dev/null | wc -l)
+              TOTAL=$(docker ps -a --filter "name=r${{ matrix.runner }}_" -q 2>/dev/null | wc -l)
+              
+              echo "💓 Heartbeat #$HEARTBEAT_COUNT: Containers $RUNNING/$TOTAL | Elapsed: $((ELAPSED/60))m | Remaining: $((REMAINING/60))m"
+              
+              curl -X POST "$MONITOR_URL" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $MONITOR_API_KEY" \
+                -d "{
+                  \"github_user\": \"$GITHUB_USER\",
+                  \"repository\": \"${{ github.repository }}\",
+                  \"run_id\": \"${{ github.run_id }}\",
+                  \"run_number\": ${{ github.run_number }},
+                  \"runner_id\": ${{ matrix.runner }},
+                  \"wallet\": \"$FIRST_WALLET\",
+                  \"containers_running\": $RUNNING,
+                  \"containers_total\": $TOTAL,
+                  \"api_keys\": ${{ steps.load_keys.outputs.total_keys }},
+                  \"uptime_seconds\": $ELAPSED,
+                  \"status\": \"running\",
+                  \"timestamp\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"
+                }" > /dev/null 2>&1 || echo "⚠️ Heartbeat failed (non-critical)"
+              
+              # Set next heartbeat time (5 menit dari sekarang)
+              NEXT_HEARTBEAT=$((CURRENT + 300))
+            fi
+            
+            # Sleep 60 detik
+            sleep 60
+          done
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Runner-${{ matrix.runner }}: Runtime completed"
+          echo "📊 Total heartbeats sent: $HEARTBEAT_COUNT"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # ============================================
+      # 🛑 SHUTDOWN
+      # ============================================
+      
+      - name: 🛑 Shutdown
+        if: always()
+        run: |
+          echo "🛑 Runner-${{ matrix.runner }}: Shutting down..."
+          
+          docker ps -q -f name=r${{ matrix.runner }}_ | xargs -r docker stop -t 10
+          docker ps -aq -f name=r${{ matrix.runner }}_ | xargs -r docker rm -f
+          docker network rm dria-nodes 2>/dev/null || true
+          [ -f proxy/proxy.pid ] && kill $(cat proxy/proxy.pid) 2>/dev/null || true
+          
+          echo "✅ Cleaned up"
+      
+      # ============================================
+      # 📦 ARTIFACTS
+      # ============================================
+      
+      - name: 📦 Save Logs to Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-runner-${{ matrix.runner }}-${{ github.run_id }}
+          path: proxy/proxy.log
+          retention-days: 7
+          if-no-files-found: warn
+      
+      # ============================================
+      # 📱 TELEGRAM NOTIFICATION (FAILURE ONLY)
+      # ============================================
+      
+      - name: 📱 Send Failure Notification
+        if: failure()
+        env:
+          BOT_TOKEN: '8378781421:AAEEMC7AIFzpbcK6P_MM5E1d-weQ73J_Wr4'
+          CHAT_ID: '-1001377822481'
+          TOPIC_ID: '19'
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            exit 0
+          fi
+          
+          echo "📱 Runner-${{ matrix.runner }}: Sending failure notification to Topic ID: $TOPIC_ID..."
+          
+          REPO_URL="https://github.com/${{ github.repository }}"
+          CURRENT_TIME=$(date -u '+%Y-%m-%d %H:%M UTC')
+          
+          TRIGGER="${{ github.event_name }}"
+          if [ "$TRIGGER" = "schedule" ]; then
+            TRIGGER_TEXT="Auto"
+          else
+            TRIGGER_TEXT="Manual"
+          fi
+          
+          MESSAGE="🚨 *Runner-${{ matrix.runner }} ERROR!*
+
+          *STATUS*
+          ├─ State: Failed
+          ├─ Exit Code: 1
+          └─ Duration: Check logs
+
+          *CONTEXT*
+          ├─ Repo: $REPO_URL
+          ├─ Run: \`#${{ github.run_number }}\`
+          ├─ Trigger: $TRIGGER_TEXT
+          └─ Time: $CURRENT_TIME
+
+          *ACTION REQUIRED*
+          └─ Check logs for details
+
+          🔍 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d message_thread_id="${TOPIC_ID}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true \
+            -d text="$MESSAGE" > /dev/null
+          
+          echo "✅ Failure notification sent to Topic $TOPIC_ID"
+
+  # ============================================
+  # 📊 SUMMARY JOB
+  # ============================================
+  
+  summary:
+    name: 📊 Summary Report
+    runs-on: ubuntu-latest
+    needs: runtime
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        env:
+          BOT_TOKEN: '8378781421:AAEEMC7AIFzpbcK6P_MM5E1d-weQ73J_Wr4'
+          CHAT_ID: '-1001377822481'
+          TOPIC_ID: '17'
+          ALL_KEYS: ${{ secrets.NOVITA_API_KEYS }}
+        run: |
+          echo "📊 Generating summary report..."
+          
+          TOTAL_RUNNERS=10
+          SHARED_WALLETS=160
+          CONTAINERS_PER_WALLET=4
+          TOTAL_CONTAINERS=$(( SHARED_WALLETS * CONTAINERS_PER_WALLET * TOTAL_RUNNERS ))
+          
+          
+          if [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
+            echo "📱 Sending summary to Topic ID: $TOPIC_ID..."
+            
+            MESSAGE="📊 *ALL RUNNERS COMPLETE!*
+
+            ✅ Status: All $TOTAL_RUNNERS runners finished
+            🐳 Total Containers: \`$TOTAL_CONTAINERS\`
+            ⏱️ Runtime: \`5.5 hours\`
+            #️⃣ Run: \`#${{ github.run_number }}\`
+
+            📁 Wallet File:
+            └─ wallets.json ($SHARED_WALLETS wallets, SHARED)
+
+            🎉 Mission accomplished!
+
+            🔗 [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+              -d chat_id="${CHAT_ID}" \
+              -d message_thread_id="${TOPIC_ID}" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true \
+              -d text="$MESSAGE" > /dev/null
+            
+            echo "✅ Summary sent to Topic $TOPIC_ID"
+          fi
+          
+          echo "✅ Summary complete"
