@@ -30,7 +30,7 @@ jobs:
       RUNTIME_HOURS: '5.5'
       REUSE_WALLETS: 'true'
       
-      BATCH_SIZE: '90'
+      BATCH_SIZE: '100'
       PAUSE_SECONDS: '60'
       PROXY_PORT: '14441'
       
