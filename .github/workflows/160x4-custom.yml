@@ -3,7 +3,7 @@ name: 🚀 160 x 4 private (5 sore)
 on:
   workflow_dispatch:
   schedule:
-    - cron: '10 10 * * *'
+    - cron: '0 1 * * *'
 permissions:
   contents: write
   actions: read
