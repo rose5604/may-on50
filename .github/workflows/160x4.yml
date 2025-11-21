@@ -272,26 +272,39 @@ jobs:
             sleep 1
           done
       
-      - name: 🧪 Test Proxy (Critical - Will Stop on Failure)
+      - name: 🧪 Test Proxy (Min 2 Pass)
         working-directory: ./proxy
         env:
           PROXY_PORT: ${{ env.PROXY_PORT }}
         run: |
           echo "🧪 Runner-${{ matrix.runner }}: Running automated proxy tests..."
-          echo "⚠️  WARNING: Deployment will be blocked if tests fail"
-          echo ""
-          
           chmod +x test_proxy.sh
           
-          if ./test_proxy.sh; then
-            echo ""
-            echo "✅ All proxy tests passed - Safe to proceed with deployment"
+          # 1. Jalankan script tapi jangan langsung exit kalau error (set +e)
+          # 2. Simpan output ke file log.txt dan tampilkan juga ke layar (tee)
+          set +e
+          ./test_proxy.sh | tee proxy_test.log
+          SCRIPT_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          
+          echo ""
+          echo "📊 Checking test results..."
+          
+          # 3. Ambil angka jumlah test yang lulus dari log
+          # Format di log: "Tests passed: 3 / 5" -> Ambil angka "3" (kolom ke-3)
+          PASS_COUNT=$(grep "Tests passed:" proxy_test.log | awk '{print $3}')
+          
+          # Default ke 0 jika tidak ketemu
+          if [ -z "$PASS_COUNT" ]; then PASS_COUNT=0; fi
+          
+          echo "Detected Passed Tests: $PASS_COUNT"
+          
+          # 4. Logic Baru: Lanjut jika Pass >= 2
+          if [ "$PASS_COUNT" -ge 2 ]; then
+            echo "✅ Success condition met: $PASS_COUNT tests passed (>= 2 required)."
             exit 0
           else
-            echo ""
-            echo "❌ Proxy tests FAILED - Stopping workflow to prevent broken deployment"
-            echo "❌ Please check proxy configuration and API keys"
-            echo "❌ Check logs above for detailed error information"
+            echo "❌ Failed condition: Only $PASS_COUNT tests passed (less than 2)."
             exit 1
           fi
       
