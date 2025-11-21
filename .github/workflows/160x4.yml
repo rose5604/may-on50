@@ -16,10 +16,10 @@ jobs:
     timeout-minutes: 360
     
     strategy:
-      max-parallel: 7
+      max-parallel: 5
       fail-fast: false
       matrix:
-        runner: [1, 2, 3, 4, 5, 6, 7]
+        runner: [1, 2, 3, 4, 5]
     
     env:
       # ============================================
@@ -35,7 +35,7 @@ jobs:
       PROXY_PORT: '14441'
       
       # Total runners (for display only)
-      TOTAL_RUNNERS: '7'
+      TOTAL_RUNNERS: '5'
       
     steps:
       # ============================================
@@ -666,7 +666,7 @@ jobs:
         run: |
           echo "📊 Generating summary report..."
           
-          TOTAL_RUNNERS=10
+          TOTAL_RUNNERS=5
           SHARED_WALLETS=160
           CONTAINERS_PER_WALLET=4
           TOTAL_CONTAINERS=$(( SHARED_WALLETS * CONTAINERS_PER_WALLET * TOTAL_RUNNERS ))
