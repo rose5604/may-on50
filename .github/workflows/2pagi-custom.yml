@@ -2,8 +2,8 @@ name: 🚀 345 x 2   -  kekurangan
 
 on:
   workflow_dispatch:
-  #schedule:
-    #- cron: '30 */5 * * *'
+  schedule:
+    - cron: '0 19 * * *'
 
 permissions:
   contents: write
@@ -25,8 +25,8 @@ jobs:
       # ============================================
       # 🔧 CONFIGURATION (EDIT HERE)
       # ============================================
-      WALLET_COUNT: '345'
-      CONTAINERS_PER_WALLET: '2'
+      WALLET_COUNT: '160'
+      CONTAINERS_PER_WALLET: '5'
       RUNTIME_HOURS: '5.5'
       REUSE_WALLETS: 'true'
       
