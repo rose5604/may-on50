@@ -1,9 +1,9 @@
-name: 🚀 345 x 2   -  kekurangan
+name: 🚀 2 30 pagi
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 19 * * *'
+    - cron: '30 19 * * *'
 
 permissions:
   contents: write
