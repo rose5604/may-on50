@@ -1,8 +1,8 @@
-name: 🚀 160    11 siang
+name: 🚀 160    5  sore
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 10 * * *'
 
 permissions:
   contents: write
