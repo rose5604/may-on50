@@ -89,7 +89,7 @@ GENERATE_RESPONSE=$(curl -s -X POST "$PROXY_URL/api/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama3.3:70b-instruct-q4_K_M",
-    "prompt": "Say hello"
+    "prompt": "Say hello, in long text"
   }' 2>&1)
 
 # Check if response contains expected fields
