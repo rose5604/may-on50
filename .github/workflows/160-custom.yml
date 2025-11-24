@@ -246,12 +246,12 @@ jobs:
           NOVITA_RPS_PER_KEY=0
           PROXY_MIN_TPS=15
           REQUEST_TIMEOUT_MS=120000
-          MAX_TOKENS_PER_REQUEST=50
+          MAX_TOKENS_PER_REQUEST=25
           NODE_ENV=production
           EOF
           
           echo "✅ Configured with ${{ steps.load_keys.outputs.total_keys }} API keys (shared)"
-          echo "💰 Token limit: 50 tokens per request (budget saving mode)"
+          echo "💰 Token limit: 25 tokens per request (budget saving mode)"
       
       - name: 🚀 Start Proxy
         working-directory: ./proxy
