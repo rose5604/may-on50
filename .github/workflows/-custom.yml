@@ -1,4 +1,4 @@
-name: 🚀 160    5  sore
+name: 🚀 225    5  sore
 on:
   workflow_dispatch:
   schedule:
@@ -24,8 +24,8 @@ jobs:
       # ============================================
       # 🔧 CONFIGURATION (EDIT HERE)
       # ============================================
-      WALLET_COUNT: '160'
-      CONTAINERS_PER_WALLET: '4'
+      WALLET_COUNT: '225'
+      CONTAINERS_PER_WALLET: '3'
       RUNTIME_HOURS: '5.5'
       REUSE_WALLETS: 'true'
       
